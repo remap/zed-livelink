@@ -142,21 +142,21 @@ void FAnimNode_ZEDLiveLinkPose::BuildPoseFromZEDAnimationData(float DeltaTime,
         if (InFrameData->Transforms.Num() == Keypoints38.Num() * 2) // body_38
         {
             NbKeypoints = 38;
-            Keypoints = Keypoints38;
-            ParentsIdx = Parents38Idx;
-            CurBoneNameMap = &BoneNameMap38;
-        }
-        else if (InFrameData->Transforms.Num() == Keypoints34.Num() * 2)// BODY_34
-        {
-            NbKeypoints = 34;
-            Keypoints = Keypoints34;
-            ParentsIdx = Parents34Idx;
-            CurBoneNameMap = &BoneNameMap34;
-        }
-        else
-        {
-            NbKeypoints = 38;
-            Keypoints = Keypoints38;
+	    Keypoints = bMirrorOnZAxis ? Keypoints38Mirrored : Keypoints38;
+	    ParentsIdx = Parents38Idx;
+	    CurBoneNameMap = &BoneNameMap38;
+	}
+	else if (InFrameData->Transforms.Num() == Keypoints34.Num() * 2)// BODY_34
+	{
+	    NbKeypoints = 34;
+	    Keypoints = bMirrorOnZAxis ? Keypoints34Mirrored : Keypoints34;
+	    ParentsIdx = Parents34Idx;
+	    CurBoneNameMap = &BoneNameMap34;
+	}
+	else
+	{
+	    NbKeypoints = 38;
+	    Keypoints = bMirrorOnZAxis ? Keypoints38Mirrored : Keypoints38;
             ParentsIdx = Parents38Idx;
         }
     }
@@ -295,7 +295,7 @@ void FAnimNode_ZEDLiveLinkPose::BuildPoseFromZEDAnimationData(float DeltaTime,
                 // Retrieves the default reference pose for the skeleton. Live Link data contains relative transforms from the default pose.
                 FQuat FinalRotation = Rotation * OutPose[CPIndex].GetRotation();
                 OutPose[CPIndex].SetRotation(FinalRotation);
-                OutPose[CPIndex].SetTranslation(Translation);
+                OutPose[CPIndex].SetTranslation(bMirrorOnZAxis ? Translation * FVector(1, -1, 1) : Translation); // If Z axis mirror: translation Y *= -1
             }
         }
     }
