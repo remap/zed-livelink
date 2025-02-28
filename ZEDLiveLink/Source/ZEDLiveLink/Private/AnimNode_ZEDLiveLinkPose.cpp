@@ -77,6 +77,12 @@ float FAnimNode_ZEDLiveLinkPose::ComputeRootTranslationFactor(FCompactPose& OutP
 
 FCompactPoseBoneIndex FAnimNode_ZEDLiveLinkPose::GetCPIndex(int32 idx, FCompactPose& OutPose, TArray<FName, TMemStackAllocator<>> TransformedBoneNames) {
     FName BoneName = TransformedBoneNames[idx];
+    if (bMirrorOnZAxis && TransformedBoneNames[idx] != "None")
+    {
+        int RemapBoneKey = *Keypoints.FindKey(*CurBoneNameMap->FindKey(TransformedBoneNames[idx]));
+        FName MirroredBoneName = *KeypointsMirrored.Find(RemapBoneKey);
+        BoneName = *CurBoneNameMap->Find(MirroredBoneName);
+    }
     const int32 MeshIndex = OutPose.GetBoneContainer().GetPoseBoneIndexForBoneName(BoneName);
     if (MeshIndex != INDEX_NONE)
     {
@@ -142,21 +148,24 @@ void FAnimNode_ZEDLiveLinkPose::BuildPoseFromZEDAnimationData(float DeltaTime,
         if (InFrameData->Transforms.Num() == Keypoints38.Num() * 2) // body_38
         {
             NbKeypoints = 38;
-	    Keypoints = bMirrorOnZAxis ? Keypoints38Mirrored : Keypoints38;
-	    ParentsIdx = Parents38Idx;
-	    CurBoneNameMap = &BoneNameMap38;
-	}
-	else if (InFrameData->Transforms.Num() == Keypoints34.Num() * 2)// BODY_34
-	{
-	    NbKeypoints = 34;
-	    Keypoints = bMirrorOnZAxis ? Keypoints34Mirrored : Keypoints34;
-	    ParentsIdx = Parents34Idx;
-	    CurBoneNameMap = &BoneNameMap34;
-	}
-	else
-	{
-	    NbKeypoints = 38;
-	    Keypoints = bMirrorOnZAxis ? Keypoints38Mirrored : Keypoints38;
+	        Keypoints = Keypoints38;
+            KeypointsMirrored = Keypoints38Mirrored;
+	        ParentsIdx = Parents38Idx;
+	        CurBoneNameMap = &BoneNameMap38;
+	    }
+	    else if (InFrameData->Transforms.Num() == Keypoints34.Num() * 2)// BODY_34
+	    {
+	        NbKeypoints = 34;
+	        Keypoints = Keypoints34;
+            KeypointsMirrored = Keypoints34Mirrored;
+	        ParentsIdx = Parents34Idx;
+	        CurBoneNameMap = &BoneNameMap34;
+	    }
+	    else
+	    {
+	        NbKeypoints = 38;
+	        Keypoints = Keypoints38;
+            KeypointsMirrored = Keypoints38Mirrored;
             ParentsIdx = Parents38Idx;
         }
     }
@@ -259,9 +268,18 @@ void FAnimNode_ZEDLiveLinkPose::BuildPoseFromZEDAnimationData(float DeltaTime,
     for (int32 i = 0; i < TransformedBoneNames.Num(); i++)
     {
         FName BoneName = TransformedBoneNames[i];
+        if (bMirrorOnZAxis && TransformedBoneNames[i] != "None")
+        {
+            int RemapBoneKey = *Keypoints.FindKey(*CurBoneNameMap->FindKey(TransformedBoneNames[i]));
+            FName MirroredBoneName = *KeypointsMirrored.Find(RemapBoneKey);
+            BoneName = *CurBoneNameMap->Find(MirroredBoneName);
+        }
 
         if (!BoneName.ToString().ToLower().Contains("conf")) { // ignore kp confidence stored as kp
-            FTransform BoneTransform = InFrameData->Transforms[i];
+            int idx = i;
+            if (bMirrorOnZAxis && (BoneName.ToString().ToLower().Contains("leg") || BoneName.ToString().ToLower().Contains("foot") || BoneName.ToString().ToLower().Contains("toe")))
+                idx = TransformedBoneNames.Find(BoneName);
+            FTransform BoneTransform = InFrameData->Transforms[idx];
             FCompactPoseBoneIndex CPIndex = GetCPIndex(i, OutPose, TransformedBoneNames);
             if (CPIndex != INDEX_NONE)
             {
@@ -290,6 +308,12 @@ void FAnimNode_ZEDLiveLinkPose::BuildPoseFromZEDAnimationData(float DeltaTime,
                 {
                     Rotation = BoneTransform.GetRotation();
                     Translation = OutPose[CPIndex].GetTranslation();
+                }
+
+                if (bMirrorOnZAxis)
+                {
+                    Rotation.W *= -1.f;
+                    Rotation.Y *= -1.f;
                 }
 
                 // Retrieves the default reference pose for the skeleton. Live Link data contains relative transforms from the default pose.
