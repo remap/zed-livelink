@@ -50,6 +50,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SourceData, meta = (PinShownByDefault))
 	bool bEnableScaling;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = SourceData, meta = (PinShownByDefault))
+	int ReId;
+
 public:
 	FAnimNode_ZEDLiveLinkPose();
 
