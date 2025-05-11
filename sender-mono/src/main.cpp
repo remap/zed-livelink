@@ -26,6 +26,7 @@
 #include "PracticalSocket.h"
 #include "json.hpp"
 #include "Util.h"
+#include "opencv/cv.hpp"
 #include <sl/Camera.hpp>
 
 using namespace sl;
@@ -34,6 +35,8 @@ nlohmann::json toJSON(int frame_id, int serial_number, sl::Timestamp timestamp, 
 nlohmann::json toJSON(int frame_id, sl::Timestamp timestamp, sl::Bodies& bodies, int id, sl::BODY_FORMAT body_format, sl::COORDINATE_SYSTEM coord_sys, sl::UNIT coord_unit);
 
 void print(string msg_prefix, ERROR_CODE err_code = ERROR_CODE::SUCCESS, string msg_suffix = "");
+
+bool visual_debug = false;
 
 // Type of data send 
 enum class ZEDLiveLinkRole
@@ -54,6 +57,8 @@ static const sl::UNIT coord_unit = sl::UNIT::MILLIMETER;
 /// ----------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
+
+    bool apply_mask = true;
 
     ZEDConfig zed_config;
     std::string zed_config_file("ZEDLiveLinkConfig.json"); // Default name and location.
@@ -93,6 +98,32 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    /**/
+    auto camera_config = zed.getCameraInformation().camera_configuration;
+
+    cv::Mat ROI = cv::Mat(camera_config.resolution.height, camera_config.resolution.width, CV_8UC1, cv::Scalar(0));
+    ROI.setTo(0);
+
+    ROI = cv::imread("mask_center.png", cv::IMREAD_GRAYSCALE);
+    cv::resize(ROI, ROI, cv::Size(camera_config.resolution.width, camera_config.resolution.height), 0, 0, cv::INTER_LINEAR);
+
+    // Attempt at ROI with zed
+    /*cv::Rect selection_rect;
+    selection_rect.x = 0;
+    selection_rect.y = 0;
+    selection_rect.width = 600;
+    selection_rect.height = 720;
+    cv::rectangle(ROI, selection_rect, cv::Scalar(255), -1);
+    sl::Mat mask(camera_config.resolution, sl::MAT_TYPE::U8_C4);
+    auto rect = cv::Rect(400, 50, camera_config.resolution.width / 3.5, camera_config.resolution.height - 50);
+    cv::Mat cvImage(camera_config.resolution.height, camera_config.resolution.width, CV_8UC4, mask.getPtr<sl::uchar1>(sl::MEM::CPU));
+    cv::rectangle(cvImage, rect, cv::Scalar(255, 255, 255, 255), -1);
+    sl::ERROR_CODE roi_status = zed.setRegionOfInterest(mask);
+    if (roi_status != sl::ERROR_CODE::SUCCESS) {
+        std::cerr << "ROI setup failed: " << sl::toString(roi_status) << std::endl;
+        return EXIT_FAILURE;
+    }
+    */
     // Enable Positional tracking (mandatory for body tracking) -------------------------------------------------------
     PositionalTrackingParameters positional_tracking_parameters;
     positional_tracking_parameters.set_floor_as_origin = zed_config.set_floor_as_origin;
@@ -170,20 +201,137 @@ int main(int argc, char **argv) {
     rt_params.measure3D_reference_frame = REFERENCE_FRAME::WORLD;
     int frame_id = 0;
 
+    //sl::Mat zed_image(resolution, MAT_TYPE::U8_C4);
+    //cv::Mat cvImage(resolution.height, resolution.width, CV_8UC4, zed_image.getPtr<sl::uchar1>(MEM::CPU));
+
+        // BODY_38 skeleton bone connections
+        const std::vector<std::pair<int, int>> BODY_38_BONES = {
+
+            // Spine
+            {0, 1}, {1, 2}, {2, 3}, {3, 4}, // Pelvis to Neck
+            {4, 5}, // Neck to Nose
+            
+            // Face
+            {5, 6}, {5, 7}, // Nose to Eyes
+            {6, 8}, {7, 9}, // Eyes to Ears
+            
+            // Shoulders to elbows
+            {10, 12}, {12, 14}, {14, 16}, // Left arm
+            {11, 13}, {13, 15}, {15, 17}, // Right arm
+
+            // Clavicles
+            {4, 10}, {4, 11}, // Neck to left/right clavicle
+
+            // Hips to knees to ankles
+            {0, 18}, {0, 19}, // Pelvis to left/right hip
+            {18, 20}, {20, 22}, // Left leg
+            {19, 21}, {21, 23}, // Right leg
+
+            // Feet (toes and heels)
+            {22, 24}, {24, 26}, {22, 28}, // Left foot
+            {23, 25}, {25, 27}, {23, 29}, // Right foot
+
+            // Left hand fingers
+            {16, 30}, {16, 32}, {16, 34}, {16, 36},
+
+            // Right hand fingers
+            {17, 31}, {17, 33}, {17, 35}, {17, 37}
+        };
+
+
     SetCtrlHandler();
     while (!exit_app)
     {
         auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         auto err = zed.grab(rt_params);
-        //std::cout << "FPS : " << zed.getCurrentFPS() << std::endl;
 
         if (err == ERROR_CODE::SUCCESS)
         {
             sl::Timestamp ts = zed.getTimestamp(sl::TIME_REFERENCE::IMAGE);
             if (zed_config.send_bodies)
-            {          
+            {
                 // Retrieve Detected Human Bodies
                 zed.retrieveBodies(bodies, body_tracking_parameters_rt);
+
+                sl::Mat zed_image(camera_config.resolution, MAT_TYPE::U8_C4);
+                zed.retrieveImage(zed_image, VIEW::LEFT);
+                cv::Mat cvImage(camera_config.resolution.height, camera_config.resolution.width, CV_8UC4, zed_image.getPtr<sl::uchar1>(MEM::CPU));
+
+                cv::Mat gray_rgba;
+                cv::cvtColor(ROI, gray_rgba, cv::COLOR_GRAY2BGRA);
+                cv::Mat blended;
+                cv::addWeighted(cvImage, 1.0, gray_rgba, 0.5, 0.0, blended);
+                // Find and delete bodies outside the ROI
+                if (apply_mask)
+                {
+                    int inside = 0;
+                    int outside = 0;
+                    std::vector<int> to_delete;
+                    for (const auto person : bodies.body_list) {
+
+                        // Center of the skeleton using lowest points of pelvis and neck
+                        int xx = (person.keypoint_2d[0].x + person.keypoint_2d[4].x) / 2;
+                        int yy = (person.keypoint_2d[0].y + person.keypoint_2d[4].y) / 2;
+
+                        if (visual_debug)
+                        {
+                            // Drawing the bbox 
+                            /*cv::Point p1(person.bounding_box_2d[0].x, person.bounding_box_2d[0].y);
+                            cv::Point p2(person.bounding_box_2d[2].x, person.bounding_box_2d[2].y);
+                            rectangle(blended, p1, p2, cv::Scalar(255, 0, 0), 4);*/
+
+                            // Drawing a circle in center
+                            cv::circle(blended, cv::Point(xx, yy), 20, cv::Scalar(0, 0, 255), 2);
+
+
+                            // Draw bones
+                            const auto& joints = person.keypoint_2d;
+                            for (const auto& joint_pair : BODY_38_BONES) {
+                                if (joint_pair.first < joints.size() && joint_pair.second < joints.size()) {
+                                    const auto& p1 = joints[joint_pair.first];
+                                    const auto& p2 = joints[joint_pair.second];
+                                    if (std::isfinite(p1.x) && std::isfinite(p1.y) &&
+                                        std::isfinite(p2.x) && std::isfinite(p2.y)) {
+                                        cv::line(blended, cv::Point(p1.x, p1.y), cv::Point(p2.x, p2.y), cv::Scalar(255, 0, 0), 2);
+                                    }
+                                }
+                            }
+                        }
+
+                        bool in_frame_check = xx >= 0 && xx < camera_config.resolution.width && yy >= 0 && yy < camera_config.resolution.height;
+                        if (in_frame_check && (int)ROI.at<uchar>(yy, xx) <= 127) {
+                            to_delete.push_back(person.id);
+                            outside++;
+                            continue;
+                        }
+                        inside++;
+                        if (visual_debug)
+                            std::cout << "x: " << xx << " y: " << yy << " pixel: " << (int)ROI.at<uchar>(xx, yy) << std::endl;
+                    }
+
+                    if (visual_debug)
+                        std::cout << "inside: " << inside << " outside: " << outside << std::endl;
+
+                    for (auto it = bodies.body_list.begin(); it != bodies.body_list.end();) {
+                        bool flag = false;
+                        for (auto id : to_delete) {
+                            if ((*it).id == id) {
+                                bodies.body_list.erase(it);
+                                flag = true;
+                                break;
+                            }
+                        }
+                        if (!flag)
+                            ++it;
+                    }
+                }
+
+
+                if (visual_debug) {
+                    cv::imshow("blended", blended);
+                    cv::waitKey(2);
+                }
+                
 #if DISPLAY_OGL
                 //Update GL View
                 viewer.updateData(bodies, cam_pose.pose_data);
@@ -378,3 +526,49 @@ nlohmann::json toJSON(int frame_id, sl::Timestamp timestamp, sl::Bodies& bodies,
 
     return j;
 }
+
+struct ROIdata
+{
+    const int radius = 50;
+    cv::Point2i last_pt;
+    cv::Mat mask, seeds, image;
+    bool selectInProgress_frgrnd = false;
+    bool selectInProgress_backgrnd = false;
+    bool isInit = false;
+    cv::Mat im_bgr, frgrnd, bckgrnd;
+
+    void init(sl::Resolution resolution) {
+        mask = cv::Mat(resolution.height, resolution.width, CV_8UC1);
+        mask.setTo(0);
+        seeds = cv::Mat(resolution.height, resolution.width, CV_8UC1);
+        seeds.setTo(cv::GrabCutClasses::GC_PR_BGD);
+        image = cv::Mat(resolution.height, resolution.width, CV_8UC4);
+        image.setTo(127);
+        isInit = false;
+        frgrnd.release();
+        bckgrnd.release();
+    }
+
+    void set(bool background, cv::Point current_pt) {
+        cv::line(seeds, current_pt, last_pt, cv::Scalar(background ? cv::GrabCutClasses::GC_BGD : cv::GrabCutClasses::GC_PR_FGD), radius);
+        cv::line(image, current_pt, last_pt, cv::Scalar(background ? cv::Scalar::all(0) : cv::Scalar::all(255)), radius);
+        last_pt = current_pt;
+    }
+
+    void updateImage(cv::Mat& im) {
+        cv::addWeighted(image, 0.5, im, 0.5, 0, im);
+    }
+
+    void compute(cv::Mat& cvImage) {
+        cv::cvtColor(cvImage, im_bgr, cv::COLOR_BGRA2BGR);
+        cv::Mat seeds_cpy;
+        seeds.copyTo(seeds_cpy);
+        cv::grabCut(im_bgr, seeds_cpy, cv::Rect(0, 0, im_bgr.cols, im_bgr.rows), frgrnd, bckgrnd, 1, isInit ? cv::GrabCutModes::GC_EVAL : cv::GrabCutModes::GC_INIT_WITH_MASK);
+
+        mask.setTo(255);
+        mask.setTo(0, seeds_cpy & 1);
+        cv::erode(mask, mask, cv::Mat(5, 5, CV_8UC1));
+
+        isInit = true;
+    }
+};
