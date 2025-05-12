@@ -37,6 +37,8 @@ nlohmann::json toJSON(int frame_id, sl::Timestamp timestamp, sl::Bodies& bodies,
 void print(string msg_prefix, ERROR_CODE err_code = ERROR_CODE::SUCCESS, string msg_suffix = "");
 
 bool visual_debug = false;
+bool apply_mask = true;
+int x_offset = 0;
 
 // Type of data send 
 enum class ZEDLiveLinkRole
@@ -58,8 +60,6 @@ static const sl::UNIT coord_unit = sl::UNIT::MILLIMETER;
 
 int main(int argc, char **argv) {
 
-    bool apply_mask = true;
-
     ZEDConfig zed_config;
     std::string zed_config_file("ZEDLiveLinkConfig.json"); // Default name and location.
     if (argc == 2)
@@ -67,7 +67,12 @@ int main(int argc, char **argv) {
         zed_config_file = argv[1];
         std::cout << "Loading " << zed_config_file << " config file.";
     }
-    else if (argc > 2)
+    else if (argc == 4) {
+        apply_mask = std::stoi(argv[1]);
+        visual_debug = std::stoi(argv[2]);
+        x_offset= std::stoi(argv[3]);
+    }
+    else if ((argc >  4))
     {
         std::cout << "Unexecpected arguments, exiting..." << std::endl;
         return EXIT_FAILURE;
@@ -103,10 +108,11 @@ int main(int argc, char **argv) {
 
     cv::Mat ROI = cv::Mat(camera_config.resolution.height, camera_config.resolution.width, CV_8UC1, cv::Scalar(0));
     ROI.setTo(0);
-
-    ROI = cv::imread("mask_center.png", cv::IMREAD_GRAYSCALE);
-    cv::resize(ROI, ROI, cv::Size(camera_config.resolution.width, camera_config.resolution.height), 0, 0, cv::INTER_LINEAR);
-
+    
+    if (apply_mask) {
+        ROI = cv::imread("mask_center.png", cv::IMREAD_GRAYSCALE);
+        cv::resize(ROI, ROI, cv::Size(camera_config.resolution.width, camera_config.resolution.height), 0, 0, cv::INTER_LINEAR);
+    }
     // Attempt at ROI with zed
     /*cv::Rect selection_rect;
     selection_rect.x = 0;
@@ -513,7 +519,7 @@ nlohmann::json toJSON(int frame_id, sl::Timestamp timestamp, sl::Bodies& bodies,
         }
 
         j["global_root_posititon"] = nlohmann::json::object();
-        j["global_root_posititon"]["x"] = isnan(body.keypoint[0].x) ? 0 : body.keypoint[0].x;
+        j["global_root_posititon"]["x"] = isnan(body.keypoint[0].x) ? 0 : body.keypoint[0].x + x_offset;
         j["global_root_posititon"]["y"] = isnan(body.keypoint[0].y) ? 0 : body.keypoint[0].y;
         j["global_root_posititon"]["z"] = isnan(body.keypoint[0].z) ? 0 : body.keypoint[0].z;
 
